@@ -1,0 +1,155 @@
+name: Linux boot.img (j1minilte)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build + fail-closed verify
+    runs-on: ubuntu-22.04
+    env:
+      TC: /opt/toolchains/arm-eabi-4.8/bin/arm-eabi-
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential gcc-arm-linux-gnueabi bc cpio bzip2 curl
+
+      - name: Toolchain (arm-eabi-4.8, AOSP 5.1 era prebuilt)
+        run: |
+          sudo mkdir -p /opt/toolchains
+          (git clone --depth 1 --branch android-5.1.1_r38 --single-branch \
+             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 \
+             /opt/toolchains/arm-eabi-4.8) \
+          || (git clone --depth 1 --branch android-5.1.1_r38 --single-branch \
+             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-eabi-4.8 \
+             /opt/toolchains/arm-eabi-4.8)
+          ls -la /opt/toolchains/arm-eabi-4.8/bin/arm-eabi-gcc
+          /opt/toolchains/arm-eabi-4.8/bin/arm-eabi-gcc --version | head -1
+
+      - name: Configure kernel (j1minilte_linux_defconfig)
+        run: |
+          make ARCH=arm CROSS_COMPILE=$TC j1minilte_linux_defconfig
+          make ARCH=arm CROSS_COMPILE=$TC olddefconfig
+          echo "== .config summary =="
+          grep -E "CONFIG_(MACH_J1MINILTE|DEVTMPFS|VT|FRAMEBUFFER_CONSOLE)=" .config
+
+      - name: Build zImage
+        run: |
+          make ARCH=arm CROSS_COMPILE=$TC -j$(nproc) zImage
+          ls -la arch/arm/boot/zImage
+
+      - name: Diagnostic - kernel dtbs vs stock dtbs (non-gating)
+        continue-on-error: true
+        run: |
+          echo "== building kernel dtbs (in-tree dtc 1.2.0) =="
+          if ! make ARCH=arm CROSS_COMPILE=$TC -j$(nproc) dtbs; then
+            echo "::warning::dtbs build failed - diagnostic skipped, job continues"
+            exit 0
+          fi
+          DTBS=""
+          for d in rev00 rev01 rev02 rev03 rev04; do
+            f="arch/arm/boot/dts/sprd-scx35l_sharkls_j1minilte_$d.dtb"
+            if [ ! -f "$f" ]; then
+              echo "::warning::$f missing - diagnostic incomplete, job continues"
+              exit 0
+            fi
+            DTBS="$DTBS $f"
+          done
+          echo "== comparing kernel-built dtbs vs stock (DIAGNOSTIC ONLY) =="
+          python3 tools/pack_dtimg.py --compare-dtb tests/stock-dtb $DTBS --out dt_diag.img
+          echo "diagnostic compare rc=$? (non-gating)"
+          ls -la dt_diag.img
+
+      - name: Build initramfs (busybox 1.36.1 static)
+        run: |
+          bash tools/build_initramfs.sh
+          ls -la ramdisk.cpio.gz
+
+      - name: Pack dt.img from stock dtbs (fail-closed verify)
+        run: |
+          python3 tools/pack_dtimg.py --verify-dtb tests/stock-dtb \
+            tests/stock-dtb/dtb_00.dtb tests/stock-dtb/dtb_01.dtb \
+            tests/stock-dtb/dtb_02.dtb tests/stock-dtb/dtb_03.dtb \
+            tests/stock-dtb/dtb_04.dtb --out dt.img
+          ls -la dt.img
+
+      - name: Pack boot.img (mkbootimg v0 + SEANDROIDENFORCE)
+        run: |
+          python3 tools/pack_bootimg.py \
+            --kernel arch/arm/boot/zImage \
+            --ramdisk ramdisk.cpio.gz \
+            --dt dt.img \
+            --cmdline "console=ttyS1,115200n8" \
+            --out boot.img
+          ls -la boot.img
+
+      - name: FAIL-CLOSED verify boot.img
+        run: |
+          set -e
+          TMP=$(mktemp -d)
+          python3 tools/parse_bootimg.py boot.img "$TMP"
+          echo "boot.img size: $(stat -c%s boot.img) bytes (limit: 20971520)"
+          python3 - <<'EOF'
+          import struct
+          d = open("boot.img", "rb").read()
+          assert d[0:8] == b"ANDROID!", "magic != ANDROID!"
+          page = struct.unpack_from("<I", d, 36)[0]
+          assert page == 2048, "page_size != 2048"
+          assert struct.unpack_from("<I", d, 12)[0] == 0x00008000, "kernel_addr != 0x8000"
+          assert struct.unpack_from("<I", d, 20)[0] == 0x01000000, "ramdisk_addr != 0x1000000"
+          assert struct.unpack_from("<I", d, 28)[0] == 0x00F00000, "second_addr != 0xF00000"
+          assert struct.unpack_from("<I", d, 32)[0] == 0x00000100, "tags_addr != 0x100"
+          cmd = d[64:576].split(b"\0")[0]
+          assert cmd == b"console=ttyS1,115200n8", f"cmdline {cmd!r}"
+          size = len(d)
+          assert size <= 20971520, f"boot.img {size} B exceeds 20 MiB"
+          k = struct.unpack_from("<I", d, 8)[0]
+          r = struct.unpack_from("<I", d, 16)[0]
+          dt_size = struct.unpack_from("<I", d, 40)[0]
+          off = page + ((k + page - 1) // page) * page + ((r + page - 1) // page) * page
+          extracted = d[off:off + dt_size]
+          stock_dt = open("dt.img", "rb").read()
+          assert extracted == stock_dt, \
+              f"extracted dt.img {len(extracted)} B != packed-from-stock dt.img {len(stock_dt)} B"
+          print("VERIFY PASS: header fields OK, size OK, dt.img byte-identical to packed-from-stock")
+          EOF
+
+      - name: Write SHA256SUMS + BUILD_INFO.txt
+        run: |
+          sha256sum zImage dt.img dt_diag.img ramdisk.cpio.gz boot.img .config > SHA256SUMS
+          {
+            echo "kernel_commit: $GITHUB_SHA"
+            echo "defconfig: j1minilte_linux_defconfig (+ olddefconfig)"
+            echo "runner: ubuntu-22.04"
+            echo "toolchain: arm-eabi-4.8 @ android-5.1.1_r38 (googlesource, LineageOS mirror fallback)"
+            echo "gcc_version: $(/opt/toolchains/arm-eabi-4.8/bin/arm-eabi-gcc --version | head -1)"
+            echo "busybox: $(sed -n 's/^VERSION=//p' tools/build_initramfs.sh) (busybox.net, sha512-pinned)"
+            echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "cmdline: console=ttyS1,115200n8"
+            echo "mkbootimg_params: page 2048 kernel_addr 0x00008000 ramdisk_addr 0x01000000 second_addr 0x00F00000 tags_addr 0x00000100 dt.img(SPRD,5 slots) SEANDROIDENFORCE"
+          } > BUILD_INFO.txt
+          cat SHA256SUMS
+          echo "---"
+          cat BUILD_INFO.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-boot-j1minilte
+          path: |
+            zImage
+            dt.img
+            dt_diag.img
+            ramdisk.cpio.gz
+            boot.img
+            .config
+            SHA256SUMS
+            BUILD_INFO.txt
+          if-no-files-found: warn
