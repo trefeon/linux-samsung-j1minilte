@@ -39,9 +39,14 @@ cd busybox-$VERSION
 
 echo "== configuring busybox (defconfig + CONFIG_STATIC)"
 make defconfig >/dev/null
-./scripts/config --enable STATIC
+# busybox 1.36.1 no longer ships scripts/config; enable STATIC via .config
+sed -i 's/^# CONFIG_STATIC is not set$/CONFIG_STATIC=y/' .config
+grep -q '^CONFIG_STATIC=y' .config || echo 'CONFIG_STATIC=y' >> .config
 # busybox 1.36.1 kconfig has no olddefconfig target; pipe defaults.
 yes "" | make oldconfig >/dev/null
+grep -q '^CONFIG_STATIC=y' .config || {
+    echo "ERROR: CONFIG_STATIC not enabled in .config"; exit 1; }
+echo "CONFIG_STATIC=y confirmed in .config"
 
 echo "== building busybox (static, arm-linux-gnueabi)"
 make -j"$(nproc)" CROSS_COMPILE=arm-linux-gnueabi-
@@ -59,4 +64,4 @@ find . -print | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT"
 
 echo "== done"
 ls -la "$OUT"
-echo "busybox version: $VERSION ($(./busybox --version 2>/dev/null || echo n/a))"
+echo "busybox version: $VERSION ($($STAGE/bin/busybox --version 2>/dev/null || echo n/a))"
