@@ -95,7 +95,7 @@ jobs:
           set -e
           TMP=$(mktemp -d)
           python3 tools/parse_bootimg.py boot.img "$TMP"
-          echo "boot.img size: $(stat -c%s boot.img) bytes (limit: 20971520)"
+          echo "boot.img size: $(stat -c%s boot.img) bytes (limit: 16777216)"
           python3 - <<'EOF'
           import struct
           d = open("boot.img", "rb").read()
@@ -109,7 +109,7 @@ jobs:
           cmd = d[64:576].split(b"\0")[0]
           assert cmd == b"console=ttyS1,115200n8", f"cmdline {cmd!r}"
           size = len(d)
-          assert size <= 20971520, f"boot.img {size} B exceeds 20 MiB"
+          assert size < 16777216, f"boot.img {size} B exceeds 16 MiB partition"
           k = struct.unpack_from("<I", d, 8)[0]
           r = struct.unpack_from("<I", d, 16)[0]
           dt_size = struct.unpack_from("<I", d, 40)[0]
