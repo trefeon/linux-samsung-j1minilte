@@ -1,0 +1,29 @@
+#!/bin/sh
+# J105F milestone-1 debug initramfs init.
+# Minimal evidence console: mounts the basics, prints a banner + kernel
+# version, logs BOOT_EVIDENCE, then drops to a shell on /dev/tty1 (the
+# framebuffer console) if the VT is up, else sleeps.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null
+
+echo "J105F Linux debug initramfs"
+cat /proc/version 2>/dev/null
+
+# Boot evidence: console (serial per cmdline) + framebuffer VT (best effort).
+echo "BOOT_EVIDENCE OK: J105F initramfs reached userspace" > /dev/console 2>/dev/null
+echo "BOOT_EVIDENCE OK: J105F initramfs reached userspace" > /dev/tty1 2>/dev/null || true
+
+if [ -e /dev/tty1 ]; then
+    echo "J105F: launching shell on /dev/tty1 (panel)"
+    exec sh </dev/tty1 >/dev/tty1 2>&1
+fi
+
+echo "J105F: /dev/tty1 not available; sleeping"
+while true; do
+    sleep 3600
+done
