@@ -24,7 +24,11 @@ Usage:
   pack_dtimg.py --out dt.img dtb_00.dtb dtb_01.dtb ... dtb_04.dtb
   pack_dtimg.py --out dt.img --verify-dtb tests/stock-dtb <5 dtbs>
     (--verify-dtb byte-compares every packed slot against <dir>/dtb_0N.dtb
-     and exits non-zero on any mismatch)
+     and exits non-zero on any mismatch - FAIL-CLOSED gate)
+  pack_dtimg.py --out dt.img --compare-dtb tests/stock-dtb <5 dtbs>
+    (--compare-dtb prints the same per-slot comparison but is DIAGNOSTIC
+     ONLY: mismatches are reported, never fatal - for kernel-built dtbs
+     that are expected to differ from the stock device dtbs)
 """
 
 import argparse
@@ -55,7 +59,14 @@ def main(argv):
     ap.add_argument(
         "--verify-dtb",
         metavar="DIR",
-        help="byte-compare each packed DTBs against DIR/dtb_0N.dtb",
+        help="byte-compare each packed DTB against DIR/dtb_0N.dtb; "
+        "exit non-zero on any mismatch (fail-closed gate)",
+    )
+    ap.add_argument(
+        "--compare-dtb",
+        metavar="DIR",
+        help="diagnostic: same per-slot comparison but non-gating - "
+        "mismatches are printed in a summary, exit is always 0",
     )
     args = ap.parse_args(argv)
 
@@ -96,10 +107,13 @@ def main(argv):
         f" [tag=0x{args.tag:x} flag=0x{args.flag:x} slot=0x{args.slot_size:x}]"
     )
 
-    if args.verify_dtb:
+    if args.verify_dtb or args.compare_dtb:
         ok = True
+        n_same = 0
         for i, path in enumerate(args.dtbs):
-            stock = os.path.join(args.verify_dtb, f"dtb_{i:02d}.dtb")
+            stock = os.path.join(
+                args.verify_dtb or args.compare_dtb, f"dtb_{i:02d}.dtb"
+            )
             if not os.path.exists(stock):
                 print(f"FAIL: {stock} missing")
                 ok = False
@@ -107,6 +121,7 @@ def main(argv):
             a = open(path, "rb").read()
             b = open(stock, "rb").read()
             same = a == b
+            n_same += 1 if same else 0
             d = next((o for o in range(min(len(a), len(b))) if a[o] != b[o]), None)
             print(
                 f"  slot {i}: {os.path.basename(path)} vs {os.path.basename(stock)}: "
@@ -116,9 +131,17 @@ def main(argv):
                 + ")"
             )
             ok = ok and same
-        if not ok:
+        if args.verify_dtb and not ok:
             sys.exit("dtb verification FAILED (see per-slot lines above)")
-        print("dtb verification OK: all packed DTBs byte-identical to stock")
+        if args.verify_dtb:
+            print("dtb verification OK: all packed DTBs byte-identical to stock")
+        if args.compare_dtb:
+            print(
+                f"dtb comparison (DIAGNOSTIC, non-gating): {n_same}/{len(args.dtbs)} "
+                "slots identical to stock; mismatches are expected for kernel-built "
+                "dtbs (in-tree dtc 1.2.0 vs the device's toolchain) and are reported "
+                "only - job continues"
+            )
 
 
 if __name__ == "__main__":
