@@ -1,0 +1,6 @@
+out/
+*.log
+zImage
+dt.img
+.config
+boot.img
