@@ -143,6 +143,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-boot-j1minilte
+          include-hidden-files: true
           path: |
             arch/arm/boot/zImage
             dt.img
