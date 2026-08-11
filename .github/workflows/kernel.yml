@@ -123,7 +123,7 @@ jobs:
 
       - name: Write SHA256SUMS + BUILD_INFO.txt
         run: |
-          sha256sum zImage dt.img dt_diag.img ramdisk.cpio.gz boot.img .config > SHA256SUMS
+          sha256sum arch/arm/boot/zImage dt.img dt_diag.img ramdisk.cpio.gz boot.img .config > SHA256SUMS
           {
             echo "kernel_commit: $GITHUB_SHA"
             echo "defconfig: j1minilte_linux_defconfig (+ olddefconfig)"
@@ -144,7 +144,7 @@ jobs:
         with:
           name: linux-boot-j1minilte
           path: |
-            zImage
+            arch/arm/boot/zImage
             dt.img
             dt_diag.img
             ramdisk.cpio.gz
