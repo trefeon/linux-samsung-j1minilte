@@ -1,29 +1,59 @@
 #!/bin/sh
-# J105F milestone-1 debug initramfs init.
-# Minimal evidence console: mounts the basics, prints a banner + kernel
-# version, logs BOOT_EVIDENCE, then drops to a shell on /dev/tty1 (the
-# framebuffer console) if the VT is up, else sleeps.
+# J105F milestone H1 debug initramfs init — boots to a shell prompt.
+#
+# Console channels:
+#   /dev/console -> ttyS1 (SPRD UART, per cmdline console=ttyS1,115200n8)
+#   /dev/tty1    -> framebuffer VT (fbcon), when CONFIG_VT/fbcon is up
+#
+# Evidence model (ROADMAP Gate D): every boot writes BOOT_EVIDENCE lines
+# to the serial console before dropping to shells. A boot with a log is a
+# data point; a boot without one is not.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+export HOME=/root
 
+# --- base mounts (idempotent; DEVTMPFS_MOUNT may already have done /dev)
 mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sysfs /sys 2>/dev/null
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
-mkdir -p /dev/pts
+mkdir -p /dev/pts /tmp /run /root
 mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+mount -t tmpfs tmpfs /run 2>/dev/null
 
-echo "J105F Linux debug initramfs"
-cat /proc/version 2>/dev/null
+hostname j1minilte 2>/dev/null
 
-# Boot evidence: console (serial per cmdline) + framebuffer VT (best effort).
-echo "BOOT_EVIDENCE OK: J105F initramfs reached userspace" > /dev/console 2>/dev/null
-echo "BOOT_EVIDENCE OK: J105F initramfs reached userspace" > /dev/tty1 2>/dev/null || true
+# --- boot evidence: full log to serial, banner to panel --------------
+{
+    echo
+    echo "==============================================="
+    echo " J105F Linux debug initramfs (H1) — boot log"
+    echo "==============================================="
+    cat /proc/version 2>/dev/null
+    echo
+    echo "cmdline : $(cat /proc/cmdline 2>/dev/null)"
+    echo "uptime  : $(cut -d' ' -f1 /proc/uptime 2>/dev/null)s"
+    echo "memory  :"
+    head -3 /proc/meminfo 2>/dev/null
+    echo "partitions (/proc/partitions, KB units):"
+    cat /proc/partitions 2>/dev/null
+    echo "BOOT_EVIDENCE OK: J105F H1 initramfs reached userspace shell"
+    echo "==============================================="
+} > /dev/console 2>&1
 
+# mirror a short banner to the panel VT if fbcon is up
 if [ -e /dev/tty1 ]; then
-    echo "J105F: launching shell on /dev/tty1 (panel)"
-    exec sh </dev/tty1 >/dev/tty1 2>&1
+    echo "J105F H1 initramfs: shell on tty1 (panel). Full log is on serial ttyS1." > /dev/tty1 2>/dev/null
+    echo "BOOT_EVIDENCE OK: J105F H1 initramfs reached userspace shell" > /dev/tty1 2>/dev/null
 fi
 
-echo "J105F: /dev/tty1 not available; sleeping"
-while true; do
-    sleep 3600
-done
+# --- debug shells -----------------------------------------------------
+if [ -e /dev/tty1 ]; then
+    # Panel is up: interactive shell on the screen as PID 1 (kernel gives
+    # init /dev/tty1 as its controlling terminal), serial shell in the
+    # background with its own ctty (setsid -c) on the console.
+    setsid -c sh -i </dev/console >/dev/console 2>&1 &
+    exec sh -i </dev/tty1 >/dev/tty1 2>&1
+fi
+# No VT: serial shell as PID 1 — the kernel gives init /dev/console as
+# its controlling terminal, so job control + Ctrl+C work on ttyS1.
+exec sh -i </dev/console >/dev/console 2>&1

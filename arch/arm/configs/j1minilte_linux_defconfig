@@ -516,7 +516,11 @@ CONFIG_ATAGS=y
 CONFIG_ZBOOT_ROM_TEXT=0x0
 CONFIG_ZBOOT_ROM_BSS=0x0
 # CONFIG_ARM_APPENDED_DTB is not set
-CONFIG_CMDLINE="root=/dev/ram0 rw initrd=0x80e00000,0x1f243f console=ttyS1,115200n8 init=/init mem=128M"
+# J105F H1: keep the serial console as the default cmdline only. The
+# vendor default carried a stale "mem=128M" (cripples the 1 GB unit if a
+# bootloader ever passes an empty cmdline) and a stale initrd=0x80e00000
+# fastboot convention that does not apply to mkbootimg-packed boot.img.
+CONFIG_CMDLINE="console=ttyS1,115200n8"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
 # CONFIG_CMDLINE_EXTEND is not set
 # CONFIG_CMDLINE_FORCE is not set

@@ -72,6 +72,21 @@ jobs:
           bash tools/build_initramfs.sh
           ls -la ramdisk.cpio.gz
 
+      - name: FAIL-CLOSED verify initramfs
+        run: |
+          set -e
+          TMP=$(mktemp -d)
+          gzip -t ramdisk.cpio.gz
+          cd "$TMP"
+          zcat "$GITHUB_WORKSPACE/ramdisk.cpio.gz" | cpio -idmu --quiet
+          test -x init || { echo "FAIL: init missing or not executable"; exit 1; }
+          test -x bin/busybox || { echo "FAIL: bin/busybox missing"; exit 1; }
+          if readelf -l bin/busybox | grep -q INTERP; then
+            echo "FAIL: busybox dynamically linked (needs static for initramfs)"; exit 1
+          fi
+          sh -n init || { echo "FAIL: init has a syntax error"; exit 1; }
+          echo "initramfs VERIFY PASS: init (sh -n OK) + statically-linked busybox; $(du -sh "$TMP" | cut -f1) unpacked"
+
       - name: Pack dt.img from stock dtbs (fail-closed verify)
         run: |
           python3 tools/pack_dtimg.py --verify-dtb tests/stock-dtb \
@@ -131,6 +146,7 @@ jobs:
             echo "toolchain: arm-eabi-4.8 @ android-5.1.1_r38 (googlesource, LineageOS mirror fallback)"
             echo "gcc_version: $(/opt/toolchains/arm-eabi-4.8/bin/arm-eabi-gcc --version | head -1)"
             echo "busybox: $(sed -n 's/^VERSION=//p' tools/build_initramfs.sh) (busybox.net, sha512-pinned)"
+            echo "initramfs: H1 debug shell (init script, serial ttyS1 + panel tty1, fail-closed CI verify)"
             echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "cmdline: console=ttyS1,115200n8"
             echo "mkbootimg_params: page 2048 kernel_addr 0x00008000 ramdisk_addr 0x01000000 second_addr 0x00F00000 tags_addr 0x00000100 dt.img(SPRD,5 slots) SEANDROIDENFORCE"
